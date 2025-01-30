@@ -1,45 +1,56 @@
 import paho.mqtt.client as mqtt
 import json
-import mysql.connector
-from mysql.connector import Error
+from pymongo import MongoClient             # pip install pymongo
+from pymongo.errors import ConnectionFailure, PyMongoError
+from datetime import datetime
+import logging
+from passwords import keys     # Arquivo para colocar todos os links e passwords
 
 # Configurações MQTT
-mqtt_server = "e6e2fd9238274ac7b5cd5c8d3f037020.s1.eu.hivemq.cloud"
+mqtt_server = keys['MQTT_SERVER']
 mqtt_port = 8883
-mqtt_user = "hivemq.webclient.1732642709438"
-mqtt_password = "GFl5Y2Hs?Xh3iE:$1;dy"
+mqtt_user = keys['MQTT_USER']
+mqtt_password = keys['MQTT_PASSWORD']
 
 # Tópico que será assinado
 topic = "sensores/dados"
 
-# Configurações do Banco de Dados
-db_config = {
-    "host": "localhost",  # Altere para o IP do servidor MySQL, se não for local
-    "user": "ana",  # Substitua pelo usuário do MySQL
-    "password": "1234",  # Substitua pela senha do MySQL
-    "database": "workbench"
-}
+# Mongo Uri
+uri = keys['MONGO_URI']
+
+# Configurações do logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def conectarMongoDB():
+    global client_mongo, collection
+    try:
+        client_mongo = MongoClient(uri)
+        client_mongo.admin.command("ping")
+        logger.info("Conexão estabelecida bem sucedida com o MongoDB!")
+        db = client_mongo['sensor_data']
+        collection = db['leituras']
+    except ConnectionFailure as e:
+        logger.error(f"Erro ao conectar ao MongoDB")
+        exit(1)
+    
 
 # Função para inserir dados no banco de dados
 def salvar_dados(temperatura, umidade, qualidade_ar):
     try:
-        # Conectar ao banco de dados
-        connection = mysql.connector.connect(**db_config)
-        if connection.is_connected():
-            cursor = connection.cursor()
-            query = """
-                INSERT INTO sensor (temperatura, umidade, qualidade_ar)
-                VALUES (%s, %s, %s)
-            """
-            cursor.execute(query, (temperatura, umidade, qualidade_ar))
-            connection.commit()
-            print("Dados salvos no banco com sucesso!")
-    except Error as e:
-        print(f"Erro ao conectar ao banco de dados: {e}")
-    finally:
-        if connection.is_connected():
-            cursor.close()
-            connection.close()
+        data_hora_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conjunto_dados = {
+            "data_hora" : data_hora_atual,
+            "umidade" : umidade,
+            "temperatura" : temperatura,
+            "qualidade_ar" : qualidade_ar
+        }
+        
+        collection.insert_one(conjunto_dados)
+        logger.info("Dados salvos com sucesso!")
+    except PyMongoError as e:
+        logger.error(f"Erro ao conectar ao MongoDB: {e}")
+        
 
 # Função chamada quando a conexão é bem-sucedida
 def on_connect(client, userdata, flags, rc):
@@ -74,6 +85,11 @@ def on_message(client, userdata, msg):
         print("Erro: Mensagem recebida não está em formato JSON válido!")
     except KeyError as e:
         print(f"Erro: Chave JSON ausente: {e}")
+
+
+client_mongo = None
+collection = None
+conectarMongoDB()
 
 # Configuração do cliente MQTT
 client = mqtt.Client()

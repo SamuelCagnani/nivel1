@@ -89,5 +89,5 @@ client.on_message = on_message
 
 print("Conectando ao broker...")
 client.connect(mqtt_server, mqtt_port, 60)
-
+#
 client.loop_forever()

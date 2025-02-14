@@ -1,24 +1,20 @@
 import paho.mqtt.client as mqtt
 import json
-from pymongo import MongoClient             # pip install pymongo
+from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, PyMongoError
 from datetime import datetime
 import logging
-from passwords import keys     # Arquivo para colocar todos os links e passwords
+from passwords import keys
 
-# Configurações MQTT
 mqtt_server = keys['MQTT_SERVER']
 mqtt_port = 8883
 mqtt_user = keys['MQTT_USER']
 mqtt_password = keys['MQTT_PASSWORD']
 
-# Tópico que será assinado
-topic = "sensores/dados"
+topics = ["sensores/temperatura", "sensores/umidade", "sensores/qualidade_do_ar"]
 
-# Mongo Uri
-uri = keys['MONGO_URI']
+uri = keys['BD_oficial_key']
 
-# Configurações do logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -27,80 +23,71 @@ def conectarMongoDB():
     try:
         client_mongo = MongoClient(uri)
         client_mongo.admin.command("ping")
-        logger.info("Conexão estabelecida bem sucedida com o MongoDB!")
-        db = client_mongo['sensor_data']
-        collection = db['leituras']
+        logger.info("Conexão bem-sucedida com o MongoDB!")
+        db = client_mongo['Extensao']
+        collection = db['sensores']
     except ConnectionFailure as e:
-        logger.error(f"Erro ao conectar ao MongoDB")
+        logger.error("Erro ao conectar ao MongoDB")
         exit(1)
-    
 
-# Função para inserir dados no banco de dados
 def salvar_dados(temperatura, umidade, qualidade_ar):
     try:
         data_hora_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conjunto_dados = {
-            "data_hora" : data_hora_atual,
-            "umidade" : umidade,
-            "temperatura" : temperatura,
-            "qualidade_ar" : qualidade_ar
+            "data_hora": data_hora_atual,
+            "temperatura": temperatura,
+            "umidade": umidade,
+            "qualidade_ar": qualidade_ar
         }
-        
         collection.insert_one(conjunto_dados)
         logger.info("Dados salvos com sucesso!")
     except PyMongoError as e:
-        logger.error(f"Erro ao conectar ao MongoDB: {e}")
-        
+        logger.error(f"Erro ao salvar no MongoDB: {e}")
 
-# Função chamada quando a conexão é bem-sucedida
+dados_recebidos = {
+    "temperatura": None,
+    "umidade": None,
+    "qualidade_ar": None
+}
+
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("Conectado ao broker MQTT!")
-        client.subscribe(topic)
-        print(f"Assinado no tópico: {topic}")
+        for topic in topics:
+            client.subscribe(topic)
+        print(f"Assinado nos tópicos: {topics}")
     else:
         print(f"Erro ao conectar. Código de retorno: {rc}")
 
-# Função chamada quando uma mensagem é recebida
 def on_message(client, userdata, msg):
+    global dados_recebidos
     try:
-        # Decodifica a mensagem e carrega como JSON
-        payload = msg.payload.decode()
-        data = json.loads(payload)
+        valor = float(msg.payload.decode()) 
 
-        # Extrai os valores do JSON
-        temperatura = data['temperatura']
-        umidade = data['umidade']
-        qualidade_ar = data['qualidade_ar']
+        if msg.topic == "sensores/temperatura":
+            dados_recebidos["temperatura"] = valor
+        elif msg.topic == "sensores/umidade":
+            dados_recebidos["umidade"] = valor
+        elif msg.topic == "sensores/qualidade_do_ar":
+            dados_recebidos["qualidade_ar"] = valor
 
-        print("Mensagem recebida (JSON):")
-        print(f"Temperatura: {temperatura}°C")
-        print(f"Umidade: {umidade}%")
-        print(f"Qualidade do ar: {qualidade_ar}")
+        print(f"Recebido -> {msg.topic}: {valor}")
 
-        # Salva os dados no banco
-        salvar_dados(temperatura, umidade, qualidade_ar)
+        if all(v is not None for v in dados_recebidos.values()):
+            salvar_dados(dados_recebidos["temperatura"], dados_recebidos["umidade"], dados_recebidos["qualidade_ar"])
+            dados_recebidos = {"temperatura": None, "umidade": None, "qualidade_ar": None}  # Reseta os valores
 
-    except json.JSONDecodeError:
-        print("Erro: Mensagem recebida não está em formato JSON válido!")
-    except KeyError as e:
-        print(f"Erro: Chave JSON ausente: {e}")
+    except ValueError:
+        print(f"Erro ao converter valor recebido de {msg.topic}")
 
-
-client_mongo = None
-collection = None
 conectarMongoDB()
-
-# Configuração do cliente MQTT
 client = mqtt.Client()
 client.username_pw_set(mqtt_user, mqtt_password)
 client.tls_set()
 client.on_connect = on_connect
 client.on_message = on_message
 
-# Conectar ao broker
 print("Conectando ao broker...")
 client.connect(mqtt_server, mqtt_port, 60)
 
-# Loop para manter o cliente funcionando
 client.loop_forever()
